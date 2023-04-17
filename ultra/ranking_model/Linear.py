@@ -59,8 +59,10 @@ class Linear( nn.Module):
         Returns:
             A list of tf.Tensor containing the ranking scores for each instance in input_list.
         """
+        # 需要确定input_data和output的具体形式
         input_data = torch.cat(input_list, dim=0)
         input_data = input_data.to(dtype=torch.float32)
+        print("input_data:",input_data)
         if torch.cuda.is_available():
             input_data = input_data.to(device=device)
         if (noisy_params==None):

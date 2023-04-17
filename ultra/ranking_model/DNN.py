@@ -71,10 +71,11 @@ class DNN(nn.Module):
         """
         input_data = torch.cat(input_list, dim=0)
         input_data = input_data.to(dtype=torch.float32)
+        print("input_data size:",input_data.shape)
         if torch.cuda.is_available():
             input_data = input_data.to(device=device)
         if (noisy_params == None):
-            output_data = self.sequential(input_data)
+            output_data = self.sequential(input_data)           
         else:
             for name, parameter in self.sequential.named_parameters():
                 if name in noisy_params:

@@ -19,7 +19,9 @@ from torch.utils.tensorboard import SummaryWriter
 import argparse
 import json
 import ultra
-
+import utils
+from fairness_algorithm import ILP
+import numpy as np
 # rank list size should be read from data
 parser = argparse.ArgumentParser(description='Pipeline commandline argument')
 parser.add_argument("--data_dir", type=str, default="./tests/data/", help="The directory of the experimental dataset.")
@@ -86,6 +88,7 @@ def train(exp_settings):
     # Prepare data.
     print("Reading data in %s" % args.data_dir)
     train_set = ultra.utils.read_data(args.data_dir, args.train_data_prefix, args.click_model_dir, args.max_list_cutoff)
+    print("train_set is:",train_set)
     ultra.utils.find_class(exp_settings['train_input_feed']).preprocess_data(train_set,
                                                                              exp_settings['train_input_hparams'],
                                                                              exp_settings)
@@ -121,12 +124,14 @@ def train(exp_settings):
 
     # Create model based on the input layer.
     print("Creating model...")
+    # model 是ranking algorithm的实例，真正的模型保存在model.model里，产生相关性得分：model,model.build()，现在的问题：build()的input的具体格式？
     model = create_model(exp_settings, train_set)
     # model.print_info()
-
+    
     # Create data feed
     train_input_feed = ultra.utils.find_class(exp_settings['train_input_feed'])(model, args.batch_size,
                                                                                 exp_settings['train_input_hparams'])
+    print("train_input_feed is:",train_input_feed)
     valid_input_feed = ultra.utils.find_class(exp_settings['valid_input_feed'])(model, args.batch_size,
                                                                                 exp_settings['valid_input_hparams'])
     test_input_feed = None
@@ -264,6 +269,7 @@ def test(exp_settings):
     while it < len(test_set.initial_list):
         input_feed, info_map = test_input_feed.get_next_batch(it, test_set, check_validation=False)
         _, output_logits, summary = model.validation(input_feed)
+        print("the output of the model.validation is:",output_logits);
         # deep copy the summary dict
         summary_list.append(copy.deepcopy(summary))
         batch_size_list.append(len(info_map['input_list']))
@@ -300,6 +306,161 @@ def main(_):
         train(exp_settings)
 
 
+# if __name__ == "__main__":
+#     argv = sys.argv
+#     main(argv)
+
 if __name__ == "__main__":
-    argv = sys.argv
-    main(argv)
+    exp_settings = json.load(open(args.setting_file))
+    # Prepare data.
+    print("Reading data in %s" % args.data_dir)
+    train_set = ultra.utils.read_data(args.data_dir, args.train_data_prefix, args.click_model_dir, args.max_list_cutoff)
+    ultra.utils.find_class(exp_settings['train_input_feed']).preprocess_data(train_set,
+                                                                             exp_settings['train_input_hparams'],
+                                                                             exp_settings)
+    valid_set = ultra.utils.read_data(args.data_dir, args.valid_data_prefix, args.click_model_dir, args.max_list_cutoff)
+    ultra.utils.find_class(exp_settings['train_input_feed']).preprocess_data(valid_set,
+                                                                             exp_settings['train_input_hparams'],
+                                                                             exp_settings)
+
+    print("Train Rank list size %d" % train_set.rank_list_size)
+    print("Valid Rank list size %d" % valid_set.rank_list_size)
+    exp_settings['max_candidate_num'] = max(train_set.rank_list_size, valid_set.rank_list_size)
+    test_set = None
+    if args.test_while_train:
+        test_set = ultra.utils.read_data(args.data_dir, args.test_data_prefix, args.max_list_cutoff)
+        ultra.utils.find_class(exp_settings['train_input_feed']).preprocess_data(test_set,
+                                                                                 exp_settings['train_input_hparams'],
+                                                                                 exp_settings)
+        print("Test Rank list size %d" % test_set.rank_list_size)
+        exp_settings['max_candidate_num'] = max(test_set.rank_list_size, exp_settings['max_candidate_num'])
+        test_set.pad(exp_settings['max_candidate_num'])
+
+    if 'selection_bias_cutoff' not in exp_settings:  # check if there is a limit on the number of items per training query.
+        exp_settings['selection_bias_cutoff'] = args.selection_bias_cutoff if args.selection_bias_cutoff > 0 else \
+            exp_settings['max_candidate_num']
+
+    exp_settings['selection_bias_cutoff'] = min(exp_settings['selection_bias_cutoff'],
+                                                exp_settings['max_candidate_num'])
+    print('Users can only see the top %d documents for each query in training.' % exp_settings['selection_bias_cutoff'])
+
+    # Pad data
+    train_set.pad(exp_settings['max_candidate_num'])
+    valid_set.pad(exp_settings['max_candidate_num'])
+
+    # Create model based on the input layer.
+    print("Creating model...")
+    # model 是ranking algorithm的实例，真正的模型保存在model.model里，产生相关性得分：model,model.build()，现在的问题：build()的input的具体格式？
+    model = create_model(exp_settings, train_set)
+    # model.print_info()
+    
+    # Create data feed
+    train_input_feed = ultra.utils.find_class(exp_settings['train_input_feed'])(model, args.batch_size,
+                                                                                exp_settings['train_input_hparams'])
+    valid_input_feed = ultra.utils.find_class(exp_settings['valid_input_feed'])(model, args.batch_size,
+                                                                                exp_settings['valid_input_hparams'])
+    test_input_feed = None
+    if args.test_while_train:
+        test_input_feed = ultra.utils.find_class(exp_settings['test_input_feed'])(model, args.batch_size,
+                                                                                  exp_settings[
+                                                                                      'test_input_hparams'])
+
+    # Create tensorboard summarizations.
+    train_writer = torch.utils.tensorboard.SummaryWriter(log_dir=args.model_dir + '/train_log')
+    valid_writer = torch.utils.tensorboard.SummaryWriter(log_dir=args.model_dir + '/valid_log')
+    test_writer = None
+    if args.test_while_train:
+        test_writer = torch.utils.tensorboard.SummaryWriter(log_dir=args.model_dir + '/test_log')
+
+    # This is the training loop.
+    step_time, loss = 0.0, 0.0
+    current_step = 0
+    previous_losses = []
+    best_perf = None
+    print("max_train_iter: ", args.max_train_iteration)
+    while True:
+        # Get a batch and make a step.
+        start_time= time.time()
+        input_feed, info_map = train_input_feed.get_batch(train_set, check_validation=True, data_format=args.data_format)
+        step_loss, _, summary = model.train(input_feed)
+        step_time += (time.time() - start_time) / args.steps_per_checkpoint
+        loss += step_loss / args.steps_per_checkpoint
+        current_step += 1
+        train_writer.add_scalars("Training at step %s" % model.global_step, summary)
+
+        # Once in a while, we save checkpoint, print statistics, and run evals.
+        if current_step % args.steps_per_checkpoint == 0:
+            # Print statistics for the previous epoch.
+            print("global step %d learning rate %.4f step-time %.2f loss "
+                  "%.4f" % (model.global_step, model.learning_rate,
+                            step_time, loss))
+            previous_losses.append(loss)
+
+            # Validate model
+            def validate_model(data_set, data_input_feed):
+                it = 0
+                count_batch = 0.0
+                summary_list = []
+                batch_size_list = []
+                while it < len(data_set.initial_list):
+                    input_feed, info_map = data_input_feed.get_next_batch(
+                        it, data_set, check_validation=False, data_format=args.data_format)
+                    _, _, summary = model.validation(input_feed)
+                    # deep copy the summary dict
+                    summary_list.append(copy.deepcopy(summary))
+                    batch_size_list.append(len(info_map['input_list']))
+                    it += batch_size_list[-1]
+                    count_batch += 1.0
+                return ultra.utils.merge_Summary(summary_list, batch_size_list)
+                # return summary_list
+
+            valid_summary = validate_model(valid_set, valid_input_feed)
+            # valid_writer.add_scalars('Validation Summary', valid_summary, model.global_step)
+            for key,value in valid_summary.items():
+                print(key, value)
+
+            if args.test_while_train:
+                test_summary = validate_model(test_set, test_input_feed)
+                test_writer.add_scalars('Validation Summary while training', valid_summary, model.global_step)
+                for key, value in test_summary.items:
+                    print(key, value)
+
+            # Save checkpoint if the objective metric on the validation set is better
+            if "objective_metric" in exp_settings:
+                for key,value in valid_summary.items():
+                    if key == exp_settings["objective_metric"]:
+                        if current_step >= args.start_saving_iteration:
+                            if best_perf == None or best_perf < value:
+                                checkpoint_path = os.path.join(args.model_dir,
+                                                               "%s.ckpt" % exp_settings['learning_algorithm'])
+                                torch.save(model.model.state_dict(), checkpoint_path)
+                                best_perf = value
+                                break
+                        print('Save model, valid %s:%.3f' % (key, best_perf))
+
+            # Save checkpoint if there is no objective metric
+            if best_perf == None and current_step > args.start_saving_iteration:
+                checkpoint_path = os.path.join(args.model_dir, "%s.ckpt" % exp_settings['learning_algorithm'])
+                torch.save(model.model.state_dict(), checkpoint_path)
+            if loss == float('inf'):
+                break
+
+            step_time, loss = 0.0, 0.0
+            sys.stdout.flush()
+
+            if args.max_train_iteration > 0 and current_step > args.max_train_iteration:
+                print("current_step: ", current_step)
+                break
+    train_writer.close()
+    valid_writer.close()
+    if args.test_while_train:
+        test_writer.close()
+    
+  
+    #qid_docidlist_dict,qid_reltensor_dict=utils.load_with_feature("data/input_with_feature.txt",136,model.model)
+    qid_docidlist_dict,qid_reltensor_dict=utils.load_with_rel("data/input_with_rel.txt")
+    ilp = ILP(qid_reltensor_dict,qid_docidlist_dict,np.array([1,0.5,0.3]),1)
+    for _ in range(20):
+
+        rl = ilp.get_ranking_list(1,2,7)
+        print(rl)

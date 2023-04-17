@@ -77,6 +77,9 @@ class BaseRankingModel(ABC, nn.Module):
 
     @abstractmethod
     def __init__(self, hparams_str=None, **kwargs):
+        print("this is an init")
+        print("this is an init")
+        print("this is an init")
         """Create the network.
 
         Args:
