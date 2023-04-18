@@ -19,6 +19,7 @@ class ILP:
         self.position_bias = position_bias
         self.fairness_tradeoff = fairness_tradeoff
         self.qid2Freq_dict = dict()
+        self.unfairness_list = []
         for qid in qid_docidlist_dict:
             self.qid2Freq_dict[qid] = 0
         self.qid2accuRelArray_dict = dict()
@@ -85,23 +86,35 @@ class ILP:
             model += xsum(X[i][j] for j in range(doc_num) ) == 1
         for j in range(doc_num):
             model += xsum(X[i][j] for i in range(doc_num) ) == 1  
-            
-        # 计算idcg
+        #
+        # rel_argmax=(-qrel_array).argsort()[:ranking_list_length]
+        # mat_constr=qrel_array[:,np.newaxis]*position_bias[np.newaxis,:]
+        # idcg=np.sum(qrel_array[rel_argmax]*position_bias)
         idcg = np.sum((np.float_power(np.array([2]*ranking_list_length),np.sort(qrel_array, axis=0)[::-1][:ranking_list_length])-np.array([1]*ranking_list_length))*position_bias[:ranking_list_length])
+        #print("idcg:",idcg)
         # 添加ndcg约束
         mat_constr=(np.float_power(np.array([2]*doc_num),qrel_array)-np.array([1]*doc_num))[:,np.newaxis]*position_bias[np.newaxis,:]
-        model += xsum(mat_constr[i][j]*X[i][j] for i in range(doc_num) for j in range(doc_num))>=(1-self.fairness_tradeoff)*idcg
-            
+        #print("mat_constr:",mat_constr)
+        model += xsum(mat_constr[i][j]*X[i][j] for i in range(doc_num) for j in range(ranking_list_length))>=(1-self.fairness_tradeoff)*idcg
+        
         status = model.optimize()
-
+        #print("ndcg:\n",sum(mat_constr[i][j]*X[i][j] for i in range(doc_num) for j in range(ranking_list_length)))
+            
         # part5: get solution of ILP problem and get ranking list
         xx = []
         if status == OptimizationStatus.OPTIMAL or status == OptimizationStatus.FEASIBLE:
-            print("Utility constrain succeeded")
+            # print("Utility constrain succeeded")
+            # print('unfairness {}'.format(model.objective_values[0]))
+            self.unfairness_list.append(model.objective_values[0])
             for i, var in enumerate(model.vars):
                 xx.append(var.x)
             xx=np.array(xx)
             xx=xx.reshape((doc_num,doc_num))
+            ndcg = 0.0
+            for i in range(doc_num):
+                for j in range(doc_num):
+                    ndcg += mat_constr[i][j]*xx[i][j]
+            #print("ndcg:",ndcg)
             rankingAllItem=np.argsort(-xx,0)[0,:]
             ranking=rankingAllItem[:ranking_list_length]
         else:
@@ -118,6 +131,7 @@ class ILP:
 
         # part7: get the true ranking list
         true_ranking_list = self.get_true_ranking_list(qid,ranking)
+        #print("ranking list:",true_ranking_list)
         return true_ranking_list
     
 
@@ -159,13 +173,13 @@ class ILP:
         for ranking in range(len(ranking_list)):
             idx = ranking_list[ranking]
             self.qid2accuExpArray_dict[qid][idx] += position_bias[ranking]
-        print("accumulateexp is:",self.qid2accuExpArray_dict[qid])
+        #print("accumulateexp is:",self.qid2accuExpArray_dict[qid])
     def update_accuRel(self,qid):
         doc_num = self.qid2accuRelArray_dict[qid].shape[0]
         for i in range(doc_num):
             rel = self.qid_reltensor_dict[qid][i]
             self.qid2accuRelArray_dict[qid][i] += rel
-        print("accumulateerel is:",self.qid2accuRelArray_dict[qid])
+        #print("accumulateerel is:",self.qid2accuRelArray_dict[qid])
     def update_query_freq(self,qid):
         self.qid2Freq_dict[qid]+=1  
     def normalize(self,*param):
