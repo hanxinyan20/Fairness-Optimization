@@ -41,13 +41,12 @@ class ILP:
         doc_num = q_accuRel_array.shape[0]
         q_freq = self.qid2Freq_dict[qid]
         ranking_list_length,candidate_num,position_bias = self.check_validation(ranking_list_length,candidate_num,doc_num)
-        # print("ranking list length:",ranking_list_length)
-        # print("candidate_num:",candidate_num)
-        # print("position bias:",position_bias)
+        
+       
         # part2: select candidates
         i2idx_dict = dict()
         if(candidate_num!=None):
-            
+            # TODO: 这两个select可以改写得更简单，看看paper
             # select the most relevance k candidates
             q = PriorityQueue()
             for idx in range(doc_num):
@@ -65,18 +64,20 @@ class ILP:
                 while(idx in i2idx_dict.values()):
                     idx = q.get()[1]
                 i2idx_dict[i] = idx
+                
+            
             q_accuRel_array = np.array([q_accuRel_array[i2idx_dict[i]] for i in range(candidate_num)])
             q_accuExp_array = np.array([q_accuExp_array[i2idx_dict[i]] for i in range(candidate_num)])
             qrel_array = np.array([qrel_array[i2idx_dict[i]] for i in range(candidate_num)])
             position_bias = position_bias[:candidate_num]
             doc_num = candidate_num
-        
-        # part3: normalize
+
+        # part3: normalize TODO: must？
         position_bias,qrel_array,q_accuExp_array,q_accuRel_array = self.normalize(position_bias,qrel_array,q_accuExp_array,q_accuRel_array)
         
         
         # part4: construct ILP problem
-        OBJ = np.abs(q_accuExp_array[:,np.newaxis]*q_freq+position_bias[np.newaxis,:]-q_accuRel_array[:,np.newaxis]*q_freq-qrel_array)
+        OBJ = np.abs(q_accuExp_array[:,np.newaxis] * q_freq + position_bias[np.newaxis,:] - q_accuRel_array[:,np.newaxis] * q_freq - qrel_array)
         model = Model()
         model.verbose=0
         X = [[model.add_var(var_type=BINARY) for _ in range(doc_num)] for _ in range(doc_num)]
@@ -87,15 +88,16 @@ class ILP:
         for j in range(doc_num):
             model += xsum(X[i][j] for i in range(doc_num) ) == 1  
         #
-        # rel_argmax=(-qrel_array).argsort()[:ranking_list_length]
-        # mat_constr=qrel_array[:,np.newaxis]*position_bias[np.newaxis,:]
-        # idcg=np.sum(qrel_array[rel_argmax]*position_bias)
+       
+       
+        # TODO: idcg的计算可以更加简化一下
+        
         idcg = np.sum((np.float_power(np.array([2]*ranking_list_length),np.sort(qrel_array, axis=0)[::-1][:ranking_list_length])-np.array([1]*ranking_list_length))*position_bias[:ranking_list_length])
         #print("idcg:",idcg)
         # 添加ndcg约束
         mat_constr=(np.float_power(np.array([2]*doc_num),qrel_array)-np.array([1]*doc_num))[:,np.newaxis]*position_bias[np.newaxis,:]
         #print("mat_constr:",mat_constr)
-        model += xsum(mat_constr[i][j]*X[i][j] for i in range(doc_num) for j in range(ranking_list_length))>=(1-self.fairness_tradeoff)*idcg
+        model += xsum(mat_constr[i][j]*X[i][j] for i in range(doc_num) for j in range(ranking_list_length))>=(self.fairness_tradeoff)*idcg
         
         status = model.optimize()
         #print("ndcg:\n",sum(mat_constr[i][j]*X[i][j] for i in range(doc_num) for j in range(ranking_list_length)))
@@ -103,8 +105,7 @@ class ILP:
         # part5: get solution of ILP problem and get ranking list
         xx = []
         if status == OptimizationStatus.OPTIMAL or status == OptimizationStatus.FEASIBLE:
-            # print("Utility constrain succeeded")
-            # print('unfairness {}'.format(model.objective_values[0]))
+            
             self.unfairness_list.append(model.objective_values[0])
             for i, var in enumerate(model.vars):
                 xx.append(var.x)
@@ -174,14 +175,18 @@ class ILP:
             idx = ranking_list[ranking]
             self.qid2accuExpArray_dict[qid][idx] += position_bias[ranking]
         #print("accumulateexp is:",self.qid2accuExpArray_dict[qid])
+        
     def update_accuRel(self,qid):
         doc_num = self.qid2accuRelArray_dict[qid].shape[0]
         for i in range(doc_num):
             rel = self.qid_reltensor_dict[qid][i]
             self.qid2accuRelArray_dict[qid][i] += rel
         #print("accumulateerel is:",self.qid2accuRelArray_dict[qid])
+        
     def update_query_freq(self,qid):
-        self.qid2Freq_dict[qid]+=1  
+        self.qid2Freq_dict[qid] += 1  
+        
     def normalize(self,*param):
+
         return [ i/i.sum() for i in param]
     

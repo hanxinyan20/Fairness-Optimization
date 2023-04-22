@@ -44,22 +44,21 @@ if __name__ == "__main__":
     else:
         position_bias = utils.position_bias.geometric(ranklist_length,5,0.5)
 
+    fname= "test/"+rel_distribution+" "+position_bias_distribution+" "+ ".png"
     for fairness_tradeoff in [0,0.6,0.8,1.0]:
-        fname= "test/"+rel_distribution+" "+position_bias_distribution+" "+"tradeoff:"+str(fairness_tradeoff) + ".txt"
-        f = open(fname,"w+")
+        
+        #f = open(fname,"w+")
         ilp = ILP(qid_reltensor_dict,qid_docidlist_dict,position_bias,fairness_tradeoff)
 
         for _ in range(iteration_times):
             rl = ilp.get_ranking_list(0,ranklist_length)
 
         #print(ilp.unfairness_list)
-        # plt.plot([i for i in range(iteration_times)],ilp.unfairness_list,label="tradeoff:"+str(fairness_tradeoff))
-        # plt.xlabel("iteration")
-        # plt.ylabel("unfairness")
-        # plt.show()
-        f.write(rel_distribution+" "+position_bias_distribution+" "+"tradeoff:"+str(fairness_tradeoff))
-        #print(ilp.unfairness_list)
-        f.writelines([str(unfairness)+"\n" for unfairness in ilp.unfairness_list])
-        f.close()
+        plt.plot([i for i in range(1,iteration_times)],ilp.unfairness_list,label="tradeoff:"+str(fairness_tradeoff))
+    plt.xlabel("iteration")
+    plt.ylabel("unfairness")
+    plt.legend()
+    plt.savefig(fname)
+  
 
     

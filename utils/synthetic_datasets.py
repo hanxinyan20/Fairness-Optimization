@@ -27,6 +27,6 @@ def exponential(query_num,doc_num):
     qid_reltensor_dict = defaultdict()
     for j in range(query_num):
         qid_docidlist_dict[j] = [i for i in range(doc_num)]
-        qid_reltensor_dict[j] = torch.tensor([exp(-i) for i in range(doc_num)])
+        qid_reltensor_dict[j] = torch.tensor([exp(-i-1) for i in range(doc_num)])
     #print("rel:",qid_reltensor_dict[0])
     return (qid_docidlist_dict,qid_reltensor_dict)
