@@ -120,6 +120,7 @@ class ILP:
             ranking=rankingAllItem[:ranking_list_length]
         else:
             print("Utility constrain failed.")
+            
             ranking=(-qrel_array).argsort()[:ranking_list_length]
         
         if(candidate_num!=None):

@@ -24,3 +24,5 @@ def geometric(len,k,p):
         positionBias[j] = positionBias[j-1]*(1-p)
     return positionBias
     
+def log(cutoff):
+    return (1/np.log2(2+np.arange(cutoff)))
